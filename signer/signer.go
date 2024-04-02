@@ -17,6 +17,7 @@
 package signer
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/tls"
@@ -24,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/notaryproject/notation-core-go/signature"
@@ -155,8 +157,51 @@ func (s *GenericSigner) Sign(ctx context.Context, desc ocispec.Descriptor, opts 
 		return nil, nil, err
 	}
 
-	// TODO: re-enable timestamping https://github.com/notaryproject/notation-go/issues/78
+	err = s.sendSignatureToAPI(ctx, sig, &envContent.SignerInfo, signingAgentId)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return sig, &envContent.SignerInfo, nil
+}
+
+func (s *GenericSigner) sendSignatureToAPI(ctx context.Context, signature []byte, signerInfo *signature.SignerInfo, signingAgentId string) error {
+	// Construct the payload for the API call
+	payload := map[string]interface{}{
+		"signature":      signature,
+		"signerInfo":     signerInfo,
+		"signingAgentId": signingAgentId,
+	}
+
+	// Convert payload to JSON
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	// Create HTTP POST request
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:8000/api/logs", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	// Set Content-Type header
+	req.Header.Set("Content-Type", "application/json")
+
+	// Perform the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send HTTP request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status code
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 // SignBlob signs the descriptor returned by blobGen and returns the marshalled envelope
